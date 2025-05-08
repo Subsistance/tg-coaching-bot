@@ -111,7 +111,7 @@ survey = [
 ]
 
 # States
-WELCOME, QUESTION, RESULT, STAGE_1, STAGE_2, FINAL_STAGE, COMPLETE = range(7)
+WELCOME, QUESTION, RESULT, STAGE_1, STAGE_2, FINAL_STAGE, PHONE_REQUEST, COMPLETE = range(8)
 
 # Where we store per-user info during the survey
 user_data = {}
@@ -282,21 +282,18 @@ final_message = (
  "✔ Практикум как создать медитацию «Безусловная уверенность и опора на себя», чтобы взращивать свою уверенность\n"
  "✔ Плейлист «Уверенность включена» — для фона, фокуса и вдохновения, на частоте, которая помогает мозгу исцелиться\n"
  "✔ PDF-чеклист «Ты уже достоин(на)» — твоя ежедневная практика для роста ценности и самоощущения.\n\n"
- "🔺 3. Индивидуальная программа 2 месяца (Премиум) — $200\n\n"
- "Для тех, кто хочет мощного рывка и долгосрочной внутренней трансформации.\n\n"
- "Ты получаешь всё из базового сопровождения, а также:\n"
- "✔ 8 коуч-сессий\n"
- "✔ Разбор твоих целей и ценностей на соответствие\n\n"
- "🎁 + Только для участников этого формата:\n"
- "✔ Доп. практики «5 ритуалов для внутреннего баланса» — чтобы не выгорать в процессе\n"
- "✔ Чек-лист «12 установок, которые мешают зарабатывать больше»\n"
- "✔ Видео-урок «Как перестать сравнивать себя с другими»\n"
- "✔ Практикум-медитация «Я могу, я достоин(на), я иду»"
 )
 
 
 # Start command — send welcome message
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_chat.id
+    payload = context.args[0] if context.args else "direct"
+
+    # Save the source to user_data
+    user_data[user_id] = user_data.get(user_id, {})
+    user_data[user_id]["source"] = payload
+
     start_button = [[KeyboardButton("🚀 Начать тест")]]
     markup = ReplyKeyboardMarkup(start_button, one_time_keyboard=True, resize_keyboard=True)
     await update.message.reply_text(
@@ -317,7 +314,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Handle "Start Survey" button
 async def begin_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_chat.id
-    user_data[user_id] = {"score": 0, "index": 0}
+    user_data[user_id]["score"] = 0
+    user_data[user_id]["index"] = 0
     return await ask_question(update, context)
 
 
@@ -378,24 +376,59 @@ async def stage_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # "Узнать больше"
 async def final_stage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    btn = [[KeyboardButton("Я иду")]]
-    markup = ReplyKeyboardMarkup(btn, one_time_keyboard=True, resize_keyboard=True)
-    await update.message.reply_text(final_message, reply_markup=markup)
-    return FINAL_STAGE
+    buttons = [
+        [KeyboardButton("Я иду! 📞 Отправить номер телефона", request_contact=True)],
+        [KeyboardButton("Пропустить")]
+    ]
+    markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True, resize_keyboard=True)
+    await update.message.reply_text(
+        "📲 Чтобы я могла с тобой связаться, нажми кнопку ниже. Я получу твой номер.\n" 
+        "Или нажми «Пропустить», если пока не готов(а) делиться контактом.",
+        reply_markup=markup
+    )
+    return PHONE_REQUEST
+
+async def handle_contact_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    username = user.full_name or user.username or f"user_{user_id}"
+    score = user_data[user_id]["score"]
+    source = user_data[user_id].get("source", "unknown")
+
+    # Handle contact OR skip
+    if update.message.contact:
+        phone_number = update.message.contact.phone_number
+    else:
+        phone_number = "не указан"
+
+    # Save to CSV with all final info
+    with open("final_signups.csv", "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([username, user_id, score, phone_number, source])
+
+    # Save to user_data for use in complete()
+    user_data[user_id]["final_phone"] = phone_number
+
+    return await complete(update, context)
 
 
 # "Я иду"
 async def complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    username = user.full_name or user.username or f"user_{user.id}"
-    score = user_data[user.id]["score"]
+    user_id = user.id
+    username = user.full_name or user.username or f"user_{user_id}"
+    score = user_data[user_id]["score"]
+    phone_number = user_data[user_id].get("final_phone", "не указал(а)")
+    source = user_data[user_id].get("source", "unknown")
 
-    # Save to CSV with only basic info
-    with open("final_signups.csv", "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow([username, user.id, score])
-
-    msg = f"🚨 Новый пользователь прошёл весь путь!\n\n👤 {username}\n🆔 {user.id}\n🎯 Баллы: {score}"
+    msg = (
+        f"🚨 Новый пользователь прошёл весь путь:\n\n"
+        f"👤 {username}\n"
+        f"🆔 {user_id}\n"
+        f"📞 Телефон: {phone_number}\n"
+        f"🎯 Баллы: {score}\n"
+        f"🌐 Источник: {source}"
+    )
     await context.bot.send_message(chat_id=ADMIN_ID, text=msg)
 
     await update.message.reply_text("Спасибо! Я свяжусь с тобой в течение 24 часов 💌")
@@ -420,7 +453,10 @@ def main():
             RESULT: [MessageHandler(filters.Regex("Уверенность"), stage_1)],
             STAGE_1: [MessageHandler(filters.Regex("Коучинг"), stage_2)],
             STAGE_2: [MessageHandler(filters.Regex("Узнать больше"), final_stage)],
-            FINAL_STAGE: [MessageHandler(filters.Regex("Я иду"), complete)],
+            PHONE_REQUEST: [
+                MessageHandler(filters.CONTACT, handle_contact_or_skip),
+                MessageHandler(filters.Regex("Пропустить"), handle_contact_or_skip)
+            ]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
