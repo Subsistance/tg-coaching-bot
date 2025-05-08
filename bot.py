@@ -1,5 +1,7 @@
 import csv
 import re
+import os
+from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
@@ -106,6 +108,45 @@ WELCOME, QUESTION, RESULT, STAGE_1, STAGE_2, FINAL_STAGE, PHONE_REQUEST, COMPLET
 
 # Where we store per-user info during the survey
 user_data = {}
+
+async def update_signup_record(user_id, username, phone="нет данных", score="нет данных", source="нет данных", last_step="started"):
+    filename = "final_signups.csv"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    is_new_file = not os.path.exists(filename)
+
+    # Read existing rows
+    if not is_new_file:
+        with open(filename, "r", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+    else:
+        rows = []
+
+    # Find user
+    found = False
+    for row in rows:
+        if len(row) >= 3 and row[2] == str(user_id):
+            #Update row
+            if phone != "нет данных":
+                row[3] = phone
+            if score != "нет данных":
+                row[4] = score
+            if source != "нет данных":
+                row[5] = source
+            row[6] = last_step
+            found = True
+            break
+
+    if not found:
+        # New user row
+        rows.append([timestamp, username, user_id, phone, score, source, last_step])
+
+    # Write updated file
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if is_new_file:
+            writer.writerow(["Timestamp", "Username", "User ID", "Phone", "Score", "Source", "Last Step"])
+        writer.writerows(rows)
 
 def escape_markdown_v2(text: str) -> str:
     escape_chars = r'_[]()`>#+-=|{}.!'
@@ -310,11 +351,14 @@ price_option_2 = (
 # Start command — send welcome message
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_chat.id
+    username = update.effective_user.full_name or update.effective_user.username or f"user_{user_id}"
     payload = context.args[0] if context.args else "direct"
 
     # Save the source to user_data
     user_data[user_id] = user_data.get(user_id, {})
     user_data[user_id]["source"] = payload
+
+    await update_signup_record(user_id, username, source=payload, last_step="User started the flow")
 
     start_button = [[KeyboardButton("🚀 Начать тест")]]
     markup = ReplyKeyboardMarkup(start_button, one_time_keyboard=True, resize_keyboard=True)
@@ -329,24 +373,57 @@ async def begin_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_chat.id
     user_data[user_id]["score"] = 0
     user_data[user_id]["index"] = 0
+
+    return await phone_request(update, context)
+
+async def phone_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buttons = [
+        [KeyboardButton("📞 Отправить номер телефона", request_contact=True)],
+        [KeyboardButton("Пропустить")]
+    ]
+    markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True, resize_keyboard=True)
+
+    await update.message.reply_text(
+        "📲 Чтобы я могла с тобой связаться, нажми кнопку ниже. Я получу твой номер.\n"
+        "Или нажми «Пропустить», если пока не готов(а) делиться контактом.",
+        reply_markup=markup
+    )
+    return PHONE_REQUEST
+
+async def handle_contact_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    username = user.full_name or user.username or f"user_{user_id}"
+    source = user_data[user_id].get("source", "unknown")
+
+    # Handle contact OR skip
+    phone_number = update.message.contact.phone_number if update.message.contact else "не указан"
+
+    await update_signup_record(user_id, username, phone=phone_number, last_step="Phone shared or skipped")
+
     return await ask_question(update, context)
 
 
 # Ask a survey question
 async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_chat.id
+    username = update.effective_user.full_name or update.effective_user.username or f"user_{user_id}"
     index = user_data[user_id]["index"]
 
     if index >= len(survey):
         score = user_data[user_id]["score"]
-        result_msg = get_result_message(score)
-        user_data[user_id]["score_result"] = result_msg
+        user_data[user_id]["score_result"] = get_result_message(score)
 
+        await update_signup_record(user_id, update.effective_user.full_name, score=str(score),
+                                   last_step="Survey completed")
+
+        # Show result
         next_button = [[KeyboardButton("Уверенность")]]
         markup = ReplyKeyboardMarkup(next_button, one_time_keyboard=True, resize_keyboard=True)
 
-        await update.message.reply_text(f"✅ Опрос пройден!\nРезультат теста: {score} баллов\n\n{result_msg}",
+        await update.message.reply_text(f"✅ Тест пройден!\nРезультат теста: {score} баллов\n\n{get_result_message(score)}",
                                         reply_markup=markup)
+        await update_signup_record(user_id, username, last_step="Viewed: get_result_message")
         return RESULT
 
     q = survey[index]
@@ -372,33 +449,42 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # "Уверенность"
 async def stage_1(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_chat.id
+    username = update.effective_user.full_name or update.effective_user.username or f"user_{user_id}"
     score = user_data[update.effective_chat.id]["score"]
     msg = get_stage_1_message(score)
     escaped_msg = escape_markdown_v2(msg)
     btn = [[KeyboardButton("Коучинг")]]
     markup = ReplyKeyboardMarkup(btn, one_time_keyboard=True, resize_keyboard=True)
 
+    await update_signup_record(user_id, username, last_step="Viewed: get_stage_1_message")
     await update.message.reply_text(escaped_msg, reply_markup=markup, parse_mode="MarkdownV2")
     return STAGE_1
 
 
 # "Коучинг"
 async def stage_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_chat.id
+    username = update.effective_user.full_name or update.effective_user.username or f"user_{user_id}"
     btn = [[KeyboardButton("Узнать больше")]]
     markup = ReplyKeyboardMarkup(btn, one_time_keyboard=True, resize_keyboard=True)
 
     escaped_stage_2_message = escape_markdown_v2(stage_2_message)
+    await update_signup_record(user_id, username, last_step="Viewed: stage_2_message")
     await update.message.reply_text(escaped_stage_2_message, reply_markup=markup, parse_mode="MarkdownV2")
     return STAGE_2
 
 
 # "Узнать больше"
 async def final_stage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_chat.id
+    username = update.effective_user.full_name or update.effective_user.username or f"user_{user_id}"
     # Show buttons for options or skip to the next step
     markup = get_final_stage_buttons()
 
     # Show the final message
     escaped_final_message = escape_markdown_v2(final_message)
+    await update_signup_record(user_id, username, last_step="Viewed: final_message")
     await update.message.reply_text(escaped_final_message, reply_markup=markup, parse_mode="MarkdownV2")
     return FINAL_STAGE
 
@@ -407,69 +493,34 @@ def get_final_stage_buttons():
     buttons = [
         ["Разовая коуч-сессия"],
         ["Сопровождение 1 месяц"],
-        ["📞 Понял(а) — хочу связаться"]
+        ["📞 Я иду!"]
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)
 
 
 async def handle_final_stage_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_chat.id
+    username = update.effective_user.full_name or update.effective_user.username or f"user_{user_id}"
     text = update.message.text
 
     if text == "Разовая коуч-сессия":
         esc_price_option_1 = escape_markdown_v2(price_option_1)
+        await update_signup_record(user_id, username, last_step="Viewed: price_option_1")
         await update.message.reply_text(esc_price_option_1, reply_markup=get_final_stage_buttons(), parse_mode="MarkdownV2")
         return FINAL_STAGE
 
     elif text == "Сопровождение 1 месяц":
         esc_price_option_2 = escape_markdown_v2(price_option_2)
+        await update_signup_record(user_id, username, last_step="Viewed: price_option_2")
         await update.message.reply_text(esc_price_option_2, reply_markup=get_final_stage_buttons(), parse_mode="MarkdownV2")
         return FINAL_STAGE
 
-    elif text == "📞 Понял(а) — хочу связаться":
-        return await phone_request(update, context)
+    elif text == "📞 Я иду!":
+        return await complete(update, context)
 
     else:
         await update.message.reply_text("Выбери один из вариантов ниже 👇", reply_markup=get_final_stage_buttons(), parse_mode="MarkdownV2")
         return FINAL_STAGE
-
-
-async def phone_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    buttons = [
-        [KeyboardButton("Я иду! 📞 Отправить номер телефона", request_contact=True)],
-        [KeyboardButton("Пропустить")]
-    ]
-    markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True, resize_keyboard=True)
-
-    await update.message.reply_text(
-        "📲 Чтобы я могла с тобой связаться, нажми кнопку ниже. Я получу твой номер.\n"
-        "Или нажми «Пропустить», если пока не готов(а) делиться контактом.",
-        reply_markup=markup
-    )
-    return PHONE_REQUEST
-
-
-async def handle_contact_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
-    username = user.full_name or user.username or f"user_{user_id}"
-    score = user_data[user_id]["score"]
-    source = user_data[user_id].get("source", "unknown")
-
-    # Handle contact OR skip
-    if update.message.contact:
-        phone_number = update.message.contact.phone_number
-    else:
-        phone_number = "не указан"
-
-    # Save to CSV with all final info
-    with open("final_signups.csv", "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow([username, user_id, score, phone_number, source])
-
-    # Save to user_data for use in complete()
-    user_data[user_id]["final_phone"] = phone_number
-
-    return await complete(update, context)
 
 
 # "Я иду"
@@ -486,10 +537,12 @@ async def complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 {username}\n"
         f"🆔 {user_id}\n"
         f"📞 Телефон: {phone_number}\n"
-        f"🎯 Баллы: {score}\n"
+        f"🎯 Результат: {score}\n"
         f"🌐 Источник: {source}"
     )
     await context.bot.send_message(chat_id=ADMIN_ID, text=msg)
+
+    await update_signup_record(user_id, username, last_step="Flow completed")
 
     await update.message.reply_text("Ссылка на реквизиты оплаты. Скиньте квитанцию об оплате в формате PDF.\n"
                                     "Спасибо! Я свяжусь с тобой в течение 24 часов 💌")
