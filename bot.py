@@ -2,15 +2,19 @@ import csv
 import re
 import os
 import telegram
+from dotenv import load_dotenv
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
 
-# <editor-fold desc="📌 CONSTANTS & CONFIG">
+# <editor-fold desc="📌 CONSTANTS & CONFIG"> test
 
 # Your Telegram ID for admin notifications
-ADMIN_IDS = [3572078]  # admin Telegram IDs
+ADMIN_IDS = [3572078, 254506150]  # admin Telegram IDs
+
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
@@ -856,7 +860,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Set up bot
 def main():
-    app = ApplicationBuilder().token("8090138169:AAGUFHYeKJNqNE3ng0IsLo83CYAWCt0fL3o").build()
+    app = ApplicationBuilder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
