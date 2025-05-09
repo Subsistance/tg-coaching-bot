@@ -3,7 +3,7 @@ import re
 import os
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
 
 # <editor-fold desc="📌 CONSTANTS & CONFIG">
@@ -164,11 +164,11 @@ final_message = (
 
 price_option_1 = (
     "Для тех, кто хочет навести порядок в голове и понять, что делать дальше.\n\n"
-    "Ты получаешь:\n"
+    "*Ты получаешь:*\n"
     "✔ 1 индивидуальную сессию (60 минут) — *цена отдельно: 50$*\n"
     "✔ Диагностику — в чём конкретно тебя стопорит синдром самозванца — *цена отдельно: 50$*\n"
     "✔ Поймем четкий фокус: куда двигаться, чтобы не сливаться — *цена отдельно: 50$*\n\n"
-    "*Подарки*:\n"
+    "*🎁 + Подарки:*\n"
     "✔ Гайд «Как справиться со страхами, если у тебя синдром самозванца?» — *цена отдельно: 30$*\n"
     "✔ Гайд: как создать свою персональную аудио-практику «5 минут уверенности» для тех моментов, "
     "когда тебя что-то останавливает — *цена отдельно: 50$*\n"
@@ -181,8 +181,8 @@ price_option_2 = (
     "Для тех, кто хочет глубоко проработать страхи, выйти на новый уровень и перестать обесценивать себя.\n\n"
     "*Ты получаешь:*\n"
     "✔ 4 коуч-сессии (60 мин) — *цена отдельно: 100$*\n"
-    "✔ Персональные упражнения и обратную связь от коуча\n"
-    "*🎁 + Только для участников этого формата:*\n"
+    "✔ Персональные упражнения и обратную связь от коуча\n\n"
+    "*🎁 + Подарки:*\n"
     "✔ Гайд «Знаю, но не делаю»: как преодолеть прокрастинацию?» — *цена отдельно: 30$*\n"
     "✔ Гайд «Ценности и цели: как понять, чего ты хочешь и какое твоё большое зачем?» — *цена отдельно: 50$*\n"
     "✔ Практикум: как создать медитацию «Безусловная уверенность и опора на себя» — *цена отдельно: 60$*\n"
@@ -192,6 +192,13 @@ price_option_2 = (
     "отдельно: 20$*\n\n"
     "Вместе общая ценность ~*280$*~\n\n"
     "🎁 Прямо сейчас вы можете забрать этот пакет за *100$*"
+)
+
+complete_message = (
+    "Тест для тебя составила *Анна Забазнова* — коуч и проводник на пути к уверенности.\n"
+    "Я работаю с синдромом самозванца, внутренним критиком и неуверенностью, помогая возвращаться к себе настоящей.\n\n"
+    "*Мой инстаграм*: https://www.instagram.com/anna.procoaching\n\n"
+    "*Мой телеграм*: https://t.me/annnacoaching"
 )
 # </editor-fold>
 
@@ -430,6 +437,8 @@ async def export_csv_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # <editor-fold desc="📊 CSV & TRACKING">
 
+CSV_COLUMNS = ["Timestamp", "Username", "User ID", "Phone", "Score", "Source", "Last Step", "Status"]
+
 #Logic for updating last step
 STEP_PRIORITY = {
     "User started": 0,
@@ -463,11 +472,20 @@ def log_user_action(user_id, username, action, extra=""):
             extra
         ])
 
-async def update_signup_record(user_id, username, phone="нет данных", score="нет данных", source="нет данных", last_step="started", status="pending"):
-    filename = "final_signups.csv"
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    is_new_file = not os.path.exists(filename)
+async def update_signup_record(
+    user_id,
+    username,
+    phone="нет данных",
+    score="нет данных",
+    source="нет данных",
+    last_step="started",
+    status="pending",
+    filename="final_signups.csv"  # ✅ allow overriding in tests
+):
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    is_new_file = not os.path.exists(filename) or os.stat(filename).st_size == 0
 
     # Read existing rows
     if not is_new_file:
@@ -514,7 +532,7 @@ async def update_signup_record(user_id, username, phone="нет данных", s
     with open(filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if is_new_file:
-            writer.writerow(["Timestamp", "Username", "User ID", "Phone", "Score", "Source", "Last Step", "Status"])
+            writer.writerow(CSV_COLUMNS)
         writer.writerows(rows)
 
 async def check_for_dropped_users():
@@ -708,10 +726,9 @@ async def complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Спасибо! Я свяжусь с тобой в течение 24 часов 💌",
                                     reply_markup=ReplyKeyboardRemove())
 
-    # 2. Show payment instruction
-    await update.message.reply_text(
-        "Ссылка на реквизиты оплаты. Скиньте квитанцию об оплате в формате PDF."
-    )
+    # 2. Show complete_message with links
+    esc_complete_message = escape_markdown_v2(complete_message)
+    await update.message.reply_text(esc_complete_message, parse_mode="MarkdownV2")
 
     # 3. Suggest restarting the test (use native way)
     await update.message.reply_text(
