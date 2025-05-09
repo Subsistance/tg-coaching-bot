@@ -1,6 +1,7 @@
 import csv
 import re
 import os
+import telegram
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
@@ -245,7 +246,7 @@ def get_result_message(score):
     elif score <= 65:
         return ("Выраженный синдром самозванца\n\nТы много работаешь, учишься, стараешься — но внутри будто "
                 "пусто.\n\n«Я не настоящий профессионал своего дела»\n«Когда-нибудь это раскроется и все поймут что я "
-                "недостаточно хороша...»\n«Я просто хорошо"
+                "недостаточно хороша...»\n«Я просто хорошо "
                 "скрываю свое истинное я…»\n\n📌 Что происходит:\n— Ты боишься просить больше\n— Не говоришь о себе "
                 "публично\n—"
                 "Отказываешься от проектов «на вырост»\n— Не можешь отпустить контроль — и устаёшь\n\nЭто не про "
@@ -290,7 +291,7 @@ def get_stage_1_message(score):
                 "*«Коучинг»*, "
                 "и я расскажу о формате работы.")
     elif score <= 65:
-        return ("💡 Ты не просто иногда сомневаешься.\nТы часто живёшь *на тонкой грани* - между «я справляюсь» и "
+        return ("💡 Ты не просто иногда сомневаешься.\n\nТы часто живёшь *на тонкой грани* - между «я справляюсь» и "
                 "«я на пределе»⚖️\nКак будто всё держится"
                 "на контроле, усилиях и страхе «не облажаться»😓\nИ даже когда снаружи все выглядит ок — внутри "
                 "накапливается тревога,"
@@ -504,7 +505,7 @@ async def update_signup_record(
     for row in rows:
         if len(row) >= 3 and row[2] == str(user_id):
             # ✅ Preserve the first non-empty phone value
-            if phone != "нет данных" and (row[3] == "нет данных" or not row[3].strip()):
+            if phone != "нет данных" and row[3].strip() in ["нет данных", "не указан", ""]:
                 row[3] = phone
             if score != "нет данных":
                 row[4] = score
@@ -722,7 +723,10 @@ async def complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Notify all admins
     for admin_id in ADMIN_IDS:
-        await context.bot.send_message(chat_id=admin_id, text=msg)
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=msg)
+        except telegram.error.BadRequest as e:
+            print(f"❌ Failed to send message to admin {admin_id}: {e}")
 
         # ✅ Send the full contact if available
         if "telegram_contact" in user_data[user_id]:
