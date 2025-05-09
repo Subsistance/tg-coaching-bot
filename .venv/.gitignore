@@ -1,0 +1,21 @@
+# Python
+*.pyc
+__pycache__/
+
+# Virtual environment
+.venv/
+
+# Environment variables
+.env
+
+# VSCode settings
+.vscode/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Test outputs
+*.log
+*.csv
+test/__pycache__/
