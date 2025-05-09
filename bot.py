@@ -2,11 +2,17 @@ import csv
 import re
 import os
 from datetime import datetime
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
+
+# <editor-fold desc="📌 CONSTANTS & CONFIG">
+
 # Your Telegram ID for admin notifications
-ADMIN_ID = 3572078  # actual Telegram ID
+ADMIN_IDS = [3572078]  # admin Telegram IDs
+
+def is_admin(user_id):
+    return user_id in ADMIN_IDS
 
 # Survey data
 survey = [
@@ -109,47 +115,92 @@ WELCOME, QUESTION, RESULT, STAGE_1, STAGE_2, FINAL_STAGE, PHONE_REQUEST, COMPLET
 # Where we store per-user info during the survey
 user_data = {}
 
-async def update_signup_record(user_id, username, phone="нет данных", score="нет данных", source="нет данных", last_step="started"):
-    filename = "final_signups.csv"
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+welcome_text = (
+    "👋 Привет, ты только что открыл тест на синдром самозванца, и это уже первый шаг к пониманию, что происходит "
+    "в твоей голове!\n\n*Этот тест поможет тебе понять:*\n\nЕсть ли у тебя синдром самозванца и насколько он "
+    "выражен\n\nЧто именно тебя стопорит — страх разоблачения, перфекционизм, прокрастинация или синдром вечного "
+    "ученика\n\nКакие шаги можно сделать "
+    "прямо сейчас, чтобы избавится от самозванца внутри себя\n\nЧто ты получишь в конце теста:\n\n"
+    "🔸 Разбор твоей ситуации и рекомендации, как с этим работать\n🔸 Узнаешь есть ли у тебя синдром самозванца и в "
+    "какой степени он выражен"
+    "\n🔸 Получишь рекомендации что делать с твоим случаем\n\nТест займет всего 1 "
+    "минуту – жми «Начать тест» и узнавай, что мешает тебе двигаться вперёд."
+)
 
-    is_new_file = not os.path.exists(filename)
+stage_2_message = (
+    "*Ты уже знаешь, что что-то внутри мешает тебе двигаться свободно.*\n"
+    "Ты работаешь, умеешь, стараешься. Но всё равно живёшь с этим фоновым напряжением — как будто в любой момент "
+    "кто-то поймёт, что ты “не тот”. Что ты — случайность. И тогда всё рухнет.\n\n"
+    "Я знаю это чувство.\n"
+    "Я сама через него проходила. И сейчас работаю с людьми, которые внешне всё делают правильно, "
+    "но внутри постоянно обесценивают себя.\n"
+    "⠀\n"
+    "📌 Я не буду говорить тебе “просто поверь в себя” — это не работает.\n"
+    "⠀\n"
+    "Я работаю в CBC — это когнитивно-поведенческий подход, один из самых изученных и эффективных в мире.\n"
+    "⠀\n"
+    "Без эзотерики. Без магии. Только конкретные мысли, реакции, действия — и то, как мы с ними обращаемся.\n\n"
+    "Как устроена работа:\n"
+    " — Мы не будем “разговаривать по душам”, чтобы стало полегче.\n"
+    "   Мы будем *менять то, как ты думаешь, действуешь и относишься к себе.*\n\n"
+    " — Ты получишь упражнения, которые реально что-то двигают.\n"
+    " — Я буду рядом в чате между сессиями — ты не останешься вариться в себе.\n"
+    " — И да, ты научишься *самокоучингу* — чтобы не зависеть от меня и дальше опираться на себя."
+)
 
-    # Read existing rows
-    if not is_new_file:
-        with open(filename, "r", encoding="utf-8") as f:
-            rows = list(csv.reader(f))
-    else:
-        rows = []
+final_message = (
+    "✨ *Хватит замирать. Время расти уверенно.*\n"
+    "*Индивидуальная работа с синдромом самозванца, страхами и внутренними блоками*\n\n"
+    "Ты много знаешь, стараешься, учишься. Но...\n"
+    " 🔸 боишься заявить о себе громко\n"
+    " 🔸 не берёшь достойную цену\n"
+    " 🔸 откладываешь важные шаги\n"
+    " 🔸 не чувствуешь, что ты «достаточно хорош(а)»\n"
+    " 🔸 сравниваешь себя с другими и замираешь\n\n"
+    "Я не буду говорить тебе «поверь в себя».\n"
+    "Мы вместе перестроим мышление, укрепим опору и сделаем так, чтобы ты начал(а) *двигаться с легкостью, уверенностью и уважением к себе.*\n\n"
+    "🎯 *Выбирай формат, который тебе подойдет:*\n\n"
+)
 
-    # Find user
-    found = False
-    for row in rows:
-        if len(row) >= 3 and row[2] == str(user_id):
-            #Update row
-            if phone != "нет данных":
-                row[3] = phone
-            if score != "нет данных":
-                row[4] = score
-            if source != "нет данных":
-                row[5] = source
-            row[6] = last_step
-            found = True
-            break
+price_option_1 = (
+    "Для тех, кто хочет навести порядок в голове и понять, что делать дальше.\n\n"
+    "Ты получаешь:\n"
+    "✔ 1 индивидуальную сессию (60 минут) — *цена отдельно: 50$*\n"
+    "✔ Диагностику — в чём конкретно тебя стопорит синдром самозванца — *цена отдельно: 50$*\n"
+    "✔ Поймем четкий фокус: куда двигаться, чтобы не сливаться — *цена отдельно: 50$*\n\n"
+    "*Подарки*:\n"
+    "✔ Гайд «Как справиться со страхами, если у тебя синдром самозванца?» — *цена отдельно: 30$*\n"
+    "✔ Гайд: как создать свою персональную аудио-практику «5 минут уверенности» для тех моментов, "
+    "когда тебя что-то останавливает — *цена отдельно: 50$*\n"
+    "Вместе общая ценность ~*230$*~\n"
+    "🎁 *Прямо сейчас вы можете забрать этот пакет за 30$*\n"
+    "🔑 Уже после одной сессии ты начнёшь чувствовать: *я могу. Имею право. Хватит тормозить.*"
+)
 
-    if not found:
-        # New user row
-        rows.append([timestamp, username, user_id, phone, score, source, last_step])
+price_option_2 = (
+    "Для тех, кто хочет глубоко проработать страхи, выйти на новый уровень и перестать обесценивать себя.\n\n"
+    "*Ты получаешь:*\n"
+    "✔ 4 коуч-сессии (60 мин) — *цена отдельно: 100$*\n"
+    "✔ Персональные упражнения и обратную связь от коуча\n"
+    "*🎁 + Только для участников этого формата:*\n"
+    "✔ Гайд «Знаю, но не делаю»: как преодолеть прокрастинацию?» — *цена отдельно: 30$*\n"
+    "✔ Гайд «Ценности и цели: как понять, чего ты хочешь и какое твоё большое зачем?» — *цена отдельно: 50$*\n"
+    "✔ Практикум: как создать медитацию «Безусловная уверенность и опора на себя» — *цена отдельно: 60$*\n"
+    "✔ Плейлист «Уверенность включена» — для фона, фокуса и вдохновения, на частоте, которая помогает мозгу "
+    "исцелиться — *цена отдельно: 20$*\n"
+    "✔ PDF-чеклист «Ты уже достоин(на)» — твоя ежедневная практика для роста ценности и самоощущения — *цена "
+    "отдельно: 20$*\n\n"
+    "Вместе общая ценность ~*280$*~\n\n"
+    "🎁 Прямо сейчас вы можете забрать этот пакет за *100$*"
+)
+# </editor-fold>
 
-    # Write updated file
-    with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        if is_new_file:
-            writer.writerow(["Timestamp", "Username", "User ID", "Phone", "Score", "Source", "Last Step"])
-        writer.writerows(rows)
+
+# <editor-fold desc="🧠 UTILS">
 
 def escape_markdown_v2(text: str) -> str:
-    escape_chars = r'_[]()`>#+-=|{}.!'
+    # Escape only necessary characters
+    escape_chars = r'[\]()>#+-=|{}.!'  # removed * and `
     return re.sub(rf'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 # Result messages based on score
@@ -212,7 +263,7 @@ def get_stage_1_message(score):
                 "работу.\n\nНа коуч-сессиях мы:\n— Разберём, какие твои настоящие ценности могут стать точкой "
                 "опоры\n— Определим цели, которые будут вдохновлять, а не выжимать\n— Уберём внутренние напряжения, "
                 "которые мешают раскрыться полностью даже в комфортном состоянии\n\nЕсли ты хочешь идти глубже и "
-                "развиваться осознанно — напиши мне **«Коучинг»**, и я расскажу, как это может выглядеть для тебя.")
+                "развиваться осознанно — напиши мне *«Коучинг»*, и я расскажу, как это может выглядеть для тебя.")
     elif score <= 50:
         return ("🔍 Ты умеешь действовать. Но когда появляется что-то новое, амбициозное или публичное — появляется и "
                 "внутренний критик. Сомнения в стиле «а вдруг я недостаточно хорош(а)?» начинают мешать расти.\n\n"
@@ -224,10 +275,10 @@ def get_stage_1_message(score):
                 " — Переопределим внутреннюю систему оценки себя\n"
                 " — Построим поддерживающую стратегию, чтобы ты мог(ла) расти без надрыва и страха\n\n"
                 "Если чувствуешь, что хочешь перестать сомневаться в том, что уже внутри тебя есть — напиши мне "
-                "**«Коучинг»**, "
+                "*«Коучинг»*, "
                 "и я расскажу о формате работы.")
     elif score <= 65:
-        return ("💡 Ты не просто иногда сомневаешься.\nТы часто живёшь **на тонкой грани** - между «я справляюсь» и "
+        return ("💡 Ты не просто иногда сомневаешься.\nТы часто живёшь *на тонкой грани* - между «я справляюсь» и "
                 "«я на пределе»⚖️\nКак будто всё держится"
                 "на контроле, усилиях и страхе «не облажаться»😓\nИ даже когда снаружи все выглядит ок — внутри "
                 "накапливается тревога,"
@@ -245,7 +296,7 @@ def get_stage_1_message(score):
                 " ✔ Подружим твою логику и чувства — чтобы они перестали тянуть в разные стороны 🤝\n\n"
                 "Ты не обязана всё тянуть сама 🤍\n"
                 "Если хочешь перестать бороться и начать жить с ощущением: «я могу, я умею, я имею право» — напиши мне "
-                "**«Коучинг»**, и мы обсудим, как начать.")
+                "*«Коучинг»*, и мы обсудим, как начать.")
     else:
         return ("🆘 Если внутри всё время ощущение, что ты как будто «не совсем настоящая», что любое новое действие "
                 "— это риск быть разоблаченной, а твои достижения будто случайны или преувеличены…\n"
@@ -263,152 +314,259 @@ def get_stage_1_message(score):
                 "✔ Поможем тебе собрать опору — не придуманный идеальный образ, а настоящего(ую) тебя, живого(ую), "
                 "уверенного(ую), устойчивого(ую) 💪\n\n"
                 "Ты не обязан(а) справляться с этим один(а). 🤍\n"
-                "Если ты чувствуешь, что хочешь начать жить иначе — напиши мне **«Коучинг»**, "
+                "Если ты чувствуешь, что хочешь начать жить иначе — напиши мне *«Коучинг»*, "
                 "и я расскажу, как это может быть именно для тебя ✨")
 
 
-welcome_text = (
-    "👋 Привет, ты только что открыл тест на синдром самозванца, и это уже первый шаг к пониманию, что происходит "
-    "в твоей голове!\n\n**Этот тест поможет тебе понять:**\n\nЕсть ли у тебя синдром самозванца и насколько он "
-    "выражен\n\nЧто именно тебя стопорит — страх разоблачения, перфекционизм, прокрастинация или синдром вечного "
-    "ученика\n\nКакие шаги можно сделать"
-    "прямо сейчас, чтобы избавится от самозванца внутри себя\n\nЧто ты получишь в конце теста:\n\n"
-    "Разбор твоей ситуации и рекомендации, как с этим работать\nУзнаешь есть ли у тебя синдром самозванца и в "
-    "какой степени он выражен"
-    "\nПолучишь рекомендации что делать с твоим случаем\n\nТест займет всего 1 "
-    "минуту – жми «Начать тест» и узнавай, что мешает тебе двигаться вперёд."
-)
-
-stage_2_message = (
-    "**Ты уже знаешь, что что-то внутри мешает тебе двигаться свободно.**\n"
-    "Ты работаешь, умеешь, стараешься. Но всё равно живёшь с этим фоновым напряжением — как будто в любой момент "
-    "кто-то поймёт, что ты “не тот”. Что ты — случайность. И тогда всё рухнет.\n\n"
-    "Я знаю это чувство.\n"
-    "Я сама через него проходила. И сейчас работаю с людьми, которые внешне всё делают правильно, "
-    "но внутри постоянно обесценивают себя.\n"
-    "⠀\n"
-    "📌 Я не буду говорить тебе “просто поверь в себя” — это не работает.\n"
-    "⠀\n"
-    "Я работаю в CBC — это когнитивно-поведенческий подход, один из самых изученных и эффективных в мире.\n"
-    "⠀\n"
-    "Без эзотерики. Без магии. Только конкретные мысли, реакции, действия — и то, как мы с ними обращаемся.\n\n"
-    "Как устроена работа:\n"
-    " — Мы не будем “разговаривать по душам”, чтобы стало полегче.\n"
-    "   Мы будем **менять то, как ты думаешь, действуешь и относишься к себе.**\n\n"
-    " — Ты получишь упражнения, которые реально что-то двигают.\n"
-    " — Я буду рядом в чате между сессиями — ты не останешься вариться в себе.\n"
-    " — И да, ты научишься **самокоучингу** — чтобы не зависеть от меня и дальше опираться на себя."
-)
-
-final_message = (
-    "✨ **Хватит замирать. Время расти уверенно.**\n"
-    "**Индивидуальная работа с синдромом самозванца, страхами и внутренними блоками**\n\n"
-    "Ты много знаешь, стараешься, учишься. Но...\n"
-    " 🔸 боишься заявить о себе громко\n"
-    " 🔸 не берёшь достойную цену\n"
-    " 🔸 откладываешь важные шаги\n"
-    " 🔸 не чувствуешь, что ты «достаточно хорош(а)»\n"
-    " 🔸 сравниваешь себя с другими и замираешь\n\n"
-    "Я не буду говорить тебе «поверь в себя».\n"
-    "Мы вместе перестроим мышление, укрепим опору и сделаем так, чтобы ты начал(а) **двигаться с легкостью, "
-    "уверенностью и уважением к себе.**\n\n"
-    "🎯 **Выбирай формат, который тебе подойдет:**\n\n"
-)
-
-price_option_1 = (
-    "Для тех, кто хочет навести порядок в голове и понять, что делать дальше.\n\n"
-    "Ты получаешь:\n"
-    "✔ 1 индивидуальную сессию (60 минут) — **цена отдельно: 50$**\n"
-    "✔ Диагностику — в чём конкретно тебя стопорит синдром самозванца — **цена отдельно: 50$**\n"
-    "✔ Поймем четкий фокус: куда двигаться, чтобы не сливаться — **цена отдельно: 50$**\n\n"
-    "**Подарки**:\n"
-    "✔ Гайд «Как справиться со страхами, если у тебя синдром самозванца?» — **цена отдельно: 30$**\n"
-    "✔ Гайд: как создать свою персональную аудио-практику «5 минут уверенности» для тех моментов, "
-    "когда тебя что-то останавливает — **цена отдельно: 50$**\n"
-    "Вместе общая ценность ~*230$*~\n"
-    "🎁 **Прямо сейчас вы можете забрать этот пакет за 30$**\n"
-    "🔑 Уже после одной сессии ты начнёшь чувствовать: *я могу. Имею право. Хватит тормозить.*"
-)
-
-price_option_2 = (
-    "Для тех, кто хочет глубоко проработать страхи, выйти на новый уровень и перестать обесценивать себя.\n\n"
-    "**Ты получаешь:**\n"
-    "✔ 4 коуч-сессии (60 мин) — **цена отдельно: 100$**\n"
-    "✔ Персональные упражнения и обратную связь от коуча\n"
-    "*🎁 + Только для участников этого формата:*\n"
-    "✔ Гайд «Знаю, но не делаю»: как преодолеть прокрастинацию?» — **цена отдельно: 30$**\n"
-    "✔ Гайд «Ценности и цели: как понять, чего ты хочешь и какое твоё большое зачем?» — **цена отдельно: 50$**\n"
-    "✔ Практикум: как создать медитацию «Безусловная уверенность и опора на себя» — **цена отдельно: 60$**\n"
-    "✔ Плейлист «Уверенность включена» — для фона, фокуса и вдохновения, на частоте, которая помогает мозгу "
-    "исцелиться — **цена отдельно: 20$**\n"
-    "✔ PDF-чеклист «Ты уже достоин(на)» — твоя ежедневная практика для роста ценности и самоощущения — **цена "
-    "отдельно: 20$**\n\n"
-    "Вместе общая ценность ~*280$*~\n\n"
-    "🎁 Прямо сейчас вы можете забрать этот пакет за **100$**"
-)
-
-
-# Start command — send welcome message
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_chat.id
-    username = update.effective_user.full_name or update.effective_user.username or f"user_{user_id}"
-    payload = context.args[0] if context.args else "direct"
-
-    # Save the source to user_data
-    user_data[user_id] = user_data.get(user_id, {})
-    user_data[user_id]["source"] = payload
-
-    await update_signup_record(user_id, username, source=payload, last_step="User started the flow")
-
-    start_button = [[KeyboardButton("🚀 Начать тест")]]
-    markup = ReplyKeyboardMarkup(start_button, one_time_keyboard=True, resize_keyboard=True)
-
-    escaped_welcome_text = escape_markdown_v2(welcome_text)
-    await update.message.reply_text(escaped_welcome_text, reply_markup=markup, parse_mode="MarkdownV2")
-    return WELCOME
-
-
-# Handle "Start Survey" button
-async def begin_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_chat.id
-    user_data[user_id]["score"] = 0
-    user_data[user_id]["index"] = 0
-
-    return await phone_request(update, context)
-
-async def phone_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def get_final_stage_buttons():
     buttons = [
-        [KeyboardButton("📞 Отправить номер телефона", request_contact=True)],
-        [KeyboardButton("Пропустить")]
+        ["Разовая коуч-сессия"],
+        ["Сопровождение 1 месяц"],
+        ["📞 Я иду!"]
     ]
-    markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True, resize_keyboard=True)
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)
 
-    await update.message.reply_text(
-        "📲 Чтобы я могла с тобой связаться, нажми кнопку ниже. Я получу твой номер.\n"
-        "Или нажми «Пропустить», если пока не готов(а) делиться контактом.",
-        reply_markup=markup
-    )
-    return PHONE_REQUEST
+# </editor-fold>
 
-async def handle_contact_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
-    username = user.full_name or user.username or f"user_{user_id}"
-    source = user_data[user_id].get("source", "unknown")
 
-    # Handle contact OR skip
-    phone_number = update.message.contact.phone_number if update.message.contact else "не указан"
+# <editor-fold desc="🔐 ADMIN COMMANDS">
 
-    await update_signup_record(user_id, username, phone=phone_number, last_step="Phone shared or skipped")
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет доступа к этой команде.")
+        return
 
-    return await ask_question(update, context)
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📄 Export Signups", callback_data="export_csv")],
+        [InlineKeyboardButton("📝 Export Action Log", callback_data="export_log")],
+        [InlineKeyboardButton("🕵️ Check Drops", callback_data="check_drops")],
+        [InlineKeyboardButton("📊 View Stats", callback_data="view_stats")]
+    ])
 
+    await update.message.reply_text("📋 Панель администратора:", reply_markup=keyboard)
+
+
+async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()  # Acknowledge press
+
+    if not is_admin(user_id):
+        await query.edit_message_text("❌ У вас нет доступа.")
+        return
+
+    if query.data == "export_csv":
+        try:
+            with open("final_signups.csv", "rb") as f:
+                await context.bot.send_document(chat_id=user_id, document=f, filename="final_signups.csv")
+        except FileNotFoundError:
+            await query.edit_message_text("⚠️ Файл ещё не создан.")
+
+    elif query.data == "export_log":
+        try:
+            with open("user_action_log.csv", "rb") as f:
+                await context.bot.send_document(chat_id=user_id, document=f, filename="user_action_log.csv")
+        except FileNotFoundError:
+            await query.edit_message_text("⚠️ Лог действий пока не создан.")
+
+    elif query.data == "check_drops":
+        await check_for_dropped_users()
+        await query.edit_message_text("✅ Проверка завершена. Обновления записаны.")
+
+    elif query.data == "view_stats":
+        stats = await generate_stats()
+        await query.edit_message_text(stats)
+
+
+async def generate_stats():
+    try:
+        with open("final_signups.csv", "r", encoding="utf-8") as f:
+            rows = list(csv.reader(f))[1:]  # skip header
+
+        total = len(rows)
+        completed = sum(1 for row in rows if row[7] == "completed")
+        dropped = sum(1 for row in rows if row[7] == "dropped")
+        pending = total - completed - dropped
+
+        return (f"📊 Статистика:\n\n"
+                f"👥 Всего пользователей: {total}\n"
+                f"✅ Завершили: {completed}\n"
+                f"⏳ В процессе: {pending}\n"
+                f"❌ Отвалились: {dropped}")
+    except Exception as e:
+        return f"⚠️ Ошибка при чтении данных: {e}"
+
+async def check_drops_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет доступа к этой команде.")
+        print(f"Unauthorized /check_drops attempt by user {user_id}")
+        return
+
+    await check_for_dropped_users()
+    await update.message.reply_text("✅ Проверка на отвалившихся пользователей завершена.")
+
+
+async def export_csv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет доступа к этой команде.")
+        return
+
+    try:
+        file_path = "final_signups.csv"
+        with open(file_path, "rb") as f:
+            await context.bot.send_document(chat_id=user_id, document=InputFile(f), filename=file_path)
+
+    except FileNotFoundError:
+        await update.message.reply_text("⚠️ Файл ещё не был создан.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при отправке файла: {e}")
+
+# </editor-fold>
+
+
+# <editor-fold desc="📊 CSV & TRACKING">
+
+#Logic for updating last step
+STEP_PRIORITY = {
+    "User started": 0,
+    "Phone shared or skipped": 1,
+    "Survey completed": 2,
+    "Viewed: get_result_message": 3,
+    "Viewed: get_stage_1_message": 4,
+    "Viewed: stage_2_message": 5,
+    "Viewed: final_message": 6,
+    "Viewed: price_option_1": 7,
+    "Viewed: price_option_2": 7,  # same level for both price options
+    "User proceeded to complete": 8,
+    "Flow completed": 9,
+}
+
+def log_user_action(user_id, username, action, extra=""):
+    filename = "user_action_log.csv"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    is_new_file = not os.path.exists(filename)
+
+    with open(filename, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if is_new_file:
+            writer.writerow(["Timestamp", "User ID", "Username", "Action", "Extra Info"])
+        writer.writerow([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            user_id,
+            username,
+            action,
+            extra
+        ])
+
+async def update_signup_record(user_id, username, phone="нет данных", score="нет данных", source="нет данных", last_step="started", status="pending"):
+    filename = "final_signups.csv"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    is_new_file = not os.path.exists(filename)
+
+    # Read existing rows
+    if not is_new_file:
+        with open(filename, "r", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+    else:
+        rows = []
+
+    # Find user
+    found = False
+    for row in rows:
+        if len(row) >= 3 and row[2] == str(user_id):
+            # ✅ Preserve the first non-empty phone value
+            if phone != "нет данных" and (row[3] == "нет данных" or not row[3].strip()):
+                row[3] = phone
+            if score != "нет данных":
+                row[4] = score
+            # Only write source if it's not already set — to preserve original attribution
+            if source != "нет данных" and (row[5] == "нет данных" or not row[5].strip()):
+                row[5] = source
+
+            # Compare last steps by priority
+            old_step = row[6]
+            old_priority = STEP_PRIORITY.get(old_step, 0)
+            new_priority = STEP_PRIORITY.get(last_step, 0)
+
+            if new_priority >= old_priority:
+                row[6] = last_step
+
+            # Always allow status update
+            if status:
+                current_status = row[7].strip().lower()
+                if current_status not in ["completed", "dropped"]:
+                    row[7] = status
+
+            found = True
+            break
+
+    if not found:
+        # New user row
+        rows.append([timestamp, username, user_id, phone, score, source, last_step, status])
+
+    # Write updated file
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if is_new_file:
+            writer.writerow(["Timestamp", "Username", "User ID", "Phone", "Score", "Source", "Last Step", "Status"])
+        writer.writerows(rows)
+
+async def check_for_dropped_users():
+    filename = "final_signups.csv"
+    updated = False
+
+    if not os.path.exists(filename):
+        return
+
+    now = datetime.now()
+
+    with open(filename, "r", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+
+    header = rows[0]
+    new_rows = [header]
+
+    for row in rows[1:]:
+        if len(row) < 8:
+            continue
+        timestamp_str, username, user_id, phone, score, source, last_step, status = row
+
+        # Only check pending users
+        if status == "pending":
+            try:
+                timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M")
+                if (now - timestamp).total_seconds() > 24 * 3600:
+                    # More than 24h passed
+                    row[7] = "dropped"
+                    updated = True
+            except Exception as e:
+                print(f"Error parsing timestamp for user {user_id}: {e}")
+
+        new_rows.append(row)
+
+    if updated:
+        with open(filename, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerows(new_rows)
+
+        print("Dropped users updated.")
+
+# </editor-fold>
+
+
+# <editor-fold desc="🤖 SURVEY LOGIC">
 
 # Ask a survey question
 async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_chat.id
-    username = update.effective_user.full_name or update.effective_user.username or f"user_{user_id}"
     index = user_data[user_id]["index"]
+
 
     if index >= len(survey):
         score = user_data[user_id]["score"]
@@ -423,7 +581,6 @@ async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(f"✅ Тест пройден!\nРезультат теста: {score} баллов\n\n{get_result_message(score)}",
                                         reply_markup=markup)
-        await update_signup_record(user_id, username, last_step="Viewed: get_result_message")
         return RESULT
 
     q = survey[index]
@@ -436,7 +593,10 @@ async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Ответы
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
     user_id = update.effective_chat.id
+    username = user.full_name or user.username or f"user_{user_id}"
+
     text = update.message.text
     index = user_data[user_id]["index"]
     for ans in survey[index]["answers"]:
@@ -444,6 +604,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data[user_id]["score"] += ans["score"]
             break
     user_data[user_id]["index"] += 1
+
+    log_user_action(user_id, username, f"Answered Q{index + 1}")
+
     return await ask_question(update, context)
 
 
@@ -452,12 +615,12 @@ async def stage_1(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_chat.id
     username = update.effective_user.full_name or update.effective_user.username or f"user_{user_id}"
     score = user_data[update.effective_chat.id]["score"]
-    msg = get_stage_1_message(score)
-    escaped_msg = escape_markdown_v2(msg)
     btn = [[KeyboardButton("Коучинг")]]
     markup = ReplyKeyboardMarkup(btn, one_time_keyboard=True, resize_keyboard=True)
 
     await update_signup_record(user_id, username, last_step="Viewed: get_stage_1_message")
+
+    escaped_msg = escape_markdown_v2(get_stage_1_message(score))
     await update.message.reply_text(escaped_msg, reply_markup=markup, parse_mode="MarkdownV2")
     return STAGE_1
 
@@ -469,8 +632,9 @@ async def stage_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
     btn = [[KeyboardButton("Узнать больше")]]
     markup = ReplyKeyboardMarkup(btn, one_time_keyboard=True, resize_keyboard=True)
 
-    escaped_stage_2_message = escape_markdown_v2(stage_2_message)
     await update_signup_record(user_id, username, last_step="Viewed: stage_2_message")
+
+    escaped_stage_2_message = escape_markdown_v2(stage_2_message)
     await update.message.reply_text(escaped_stage_2_message, reply_markup=markup, parse_mode="MarkdownV2")
     return STAGE_2
 
@@ -483,19 +647,11 @@ async def final_stage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     markup = get_final_stage_buttons()
 
     # Show the final message
-    escaped_final_message = escape_markdown_v2(final_message)
     await update_signup_record(user_id, username, last_step="Viewed: final_message")
+
+    escaped_final_message = escape_markdown_v2(final_message)
     await update.message.reply_text(escaped_final_message, reply_markup=markup, parse_mode="MarkdownV2")
     return FINAL_STAGE
-
-
-def get_final_stage_buttons():
-    buttons = [
-        ["Разовая коуч-сессия"],
-        ["Сопровождение 1 месяц"],
-        ["📞 Я иду!"]
-    ]
-    return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)
 
 
 async def handle_final_stage_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -530,7 +686,7 @@ async def complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.full_name or user.username or f"user_{user_id}"
     score = user_data[user_id]["score"]
     phone_number = user_data[user_id].get("final_phone", "не указал(а)")
-    source = user_data[user_id].get("source", "unknown")
+    source = user_data.get(user_id, {}).get("source", "direct")
 
     msg = (
         f"🚨 Новый пользователь прошёл весь путь:\n\n"
@@ -540,13 +696,96 @@ async def complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎯 Результат: {score}\n"
         f"🌐 Источник: {source}"
     )
-    await context.bot.send_message(chat_id=ADMIN_ID, text=msg)
 
-    await update_signup_record(user_id, username, last_step="Flow completed")
+    # Notify all admins
+    for admin_id in ADMIN_IDS:
+        await context.bot.send_message(chat_id=admin_id, text=msg)
 
-    await update.message.reply_text("Ссылка на реквизиты оплаты. Скиньте квитанцию об оплате в формате PDF.\n"
-                                    "Спасибо! Я свяжусь с тобой в течение 24 часов 💌")
+    log_user_action(user_id, username, "Completed flow", f"Score: {score}")
+    await update_signup_record(user_id, username, last_step="Flow completed", status="completed")
+
+    # 1. Remove old buttons
+    await update.message.reply_text("Спасибо! Я свяжусь с тобой в течение 24 часов 💌",
+                                    reply_markup=ReplyKeyboardRemove())
+
+    # 2. Show payment instruction
+    await update.message.reply_text(
+        "Ссылка на реквизиты оплаты. Скиньте квитанцию об оплате в формате PDF."
+    )
+
+    # 3. Suggest restarting the test (use native way)
+    await update.message.reply_text(
+        "🔁 Хочешь пройти тест заново? Просто нажми /start"
+    )
+
     return ConversationHandler.END
+
+# </editor-fold>
+
+
+# <editor-fold desc="🧵 CONVERSATION HANDLERS">
+
+# Start command — send welcome message
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    username = update.effective_user.full_name or update.effective_user.username or f"user_{user_id}"
+    source = context.args[0] if context.args else "direct"
+    user_data[user_id] = {"score": 0, "index": 0, "source": source}
+
+    log_user_action(user_id, username, "Started bot", f"Source: {source}")
+    return await show_welcome(update.message, user_id, username, source, context)
+
+async def show_welcome(message, user_id, username, source, context):
+    start_button = [[KeyboardButton("🚀 Начать тест")]]
+    markup = ReplyKeyboardMarkup(start_button, one_time_keyboard=True, resize_keyboard=True)
+
+    await update_signup_record(user_id, username, source=source, last_step="User started the flow")
+
+    escaped_text = escape_markdown_v2(welcome_text)
+    await message.reply_text(escaped_text, reply_markup=markup, parse_mode="MarkdownV2")
+
+    return WELCOME
+
+
+# Handle "Start Survey" button
+async def begin_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_chat.id
+
+    user_data[user_id]["score"] = 0
+    user_data[user_id]["index"] = 0
+
+    return await phone_request(update, context)
+
+async def phone_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buttons = [
+        [KeyboardButton("📞 Отправить номер телефона", request_contact=True)],
+        [KeyboardButton("Пропустить")]
+    ]
+    markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True, resize_keyboard=True)
+
+    await update.message.reply_text(
+        "📲 Чтобы я могла с тобой связаться, нажми кнопку ниже. Я получу твой номер.\n"
+        "Или нажми «Пропустить», если пока не готов(а) делиться контактом.",
+        reply_markup=markup
+    )
+    return PHONE_REQUEST
+
+async def handle_contact_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    username = user.full_name or user.username or f"user_{user_id}"
+    source = user_data[user_id].get("source", "unknown")
+
+    # Handle contact OR skip
+    phone_number = update.message.contact.phone_number if update.message.contact else "не указан"
+
+    # Save to user_data for later access in complete()
+    user_data[user_id]["final_phone"] = phone_number
+
+    log_user_action(user_id, username, "Phone shared or skipped", phone_number)
+    await update_signup_record(user_id, username, phone=phone_number, last_step="Phone shared or skipped")
+
+    return await ask_question(update, context)
 
 
 # Cancel command
@@ -554,6 +793,10 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Тест отменён.")
     return ConversationHandler.END
 
+# </editor-fold>
+
+
+# <editor-fold desc="🧰 APP & MAIN()">
 
 # Set up bot
 def main():
@@ -562,23 +805,31 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            WELCOME: [MessageHandler(filters.Regex("🚀 Начать тест"), begin_survey)],
+            WELCOME: [MessageHandler(filters.Regex(r"^🚀 Начать тест$"), begin_survey)],
+            PHONE_REQUEST: [
+                MessageHandler(filters.CONTACT, handle_contact_or_skip),
+                MessageHandler(filters.Regex("Пропустить"), handle_contact_or_skip)
+            ],
             QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_answer)],
             RESULT: [MessageHandler(filters.Regex("Уверенность"), stage_1)],
             STAGE_1: [MessageHandler(filters.Regex("Коучинг"), stage_2)],
             STAGE_2: [MessageHandler(filters.Regex("Узнать больше"), final_stage)],
-            FINAL_STAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_final_stage_buttons)],
-            PHONE_REQUEST: [
-                MessageHandler(filters.CONTACT, handle_contact_or_skip),
-                MessageHandler(filters.Regex("Пропустить"), handle_contact_or_skip)
-            ]
+            FINAL_STAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_final_stage_buttons)]
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel)
+        ]
     )
 
     app.add_handler(conv_handler)
+    app.add_handler(CommandHandler("check_drops", check_drops_command))
+    app.add_handler(CommandHandler("export_csv", export_csv_command))
+    app.add_handler(CommandHandler("admin_panel", admin_panel))
+    app.add_handler(CallbackQueryHandler(admin_button_handler))
     app.run_polling()
 
 
 if __name__ == "__main__":
     main()
+
+# </editor-fold>
