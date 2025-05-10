@@ -2,10 +2,13 @@ import csv
 import re
 import os
 import telegram
+import logging
+import asyncio
 from dotenv import load_dotenv
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
+from telegram.error import Conflict
 
 
 # <editor-fold desc="📌 CONSTANTS & CONFIG"> test
@@ -18,6 +21,12 @@ TOKEN = os.getenv("BOT_TOKEN")
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
+
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO  # or DEBUG for more detailed output
+)
+logger = logging.getLogger(__name__)
 
 # Survey data
 survey = [
@@ -859,8 +868,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # <editor-fold desc="🧰 APP & MAIN()">
 
 # Set up bot
-def main():
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
+
+    # 🛑 Ensure no webhook blocks polling
+    await app.bot.delete_webhook(drop_pending_updates=True)
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -886,10 +898,20 @@ def main():
     app.add_handler(CommandHandler("export_csv", export_csv_command))
     app.add_handler(CommandHandler("admin_panel", admin_panel))
     app.add_handler(CallbackQueryHandler(admin_button_handler))
-    app.run_polling()
+
+    logger.info("🚀 Starting bot via polling")
+    await app.run_polling()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except RuntimeError as e:
+        # Fallback for environments where the event loop is already running
+        import nest_asyncio
+        import asyncio
+        nest_asyncio.apply()
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(main())
 
 # </editor-fold>
