@@ -3,7 +3,7 @@ import re
 import os
 import telegram
 import logging
-import asyncio
+
 from dotenv import load_dotenv
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
@@ -868,11 +868,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # <editor-fold desc="🧰 APP & MAIN()">
 
 # Set up bot
-async def main():
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # 🛑 Ensure no webhook blocks polling
-    await app.bot.delete_webhook(drop_pending_updates=True)
+    # 🛑 Ensure no webhook blocks polling (removed for now)
+    # app.bot.delete_webhook(drop_pending_updates=True)
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -899,19 +899,10 @@ async def main():
     app.add_handler(CommandHandler("admin_panel", admin_panel))
     app.add_handler(CallbackQueryHandler(admin_button_handler))
 
-    logger.info("🚀 Starting bot via polling")
-    await app.run_polling()
+    app.run_polling()
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except RuntimeError as e:
-        # Fallback for environments where the event loop is already running
-        import nest_asyncio
-        import asyncio
-        nest_asyncio.apply()
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(main())
+    main()
 
 # </editor-fold>
