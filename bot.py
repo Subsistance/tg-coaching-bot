@@ -22,11 +22,16 @@ TOKEN = os.getenv("BOT_TOKEN")
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
+# Main logger setup
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO  # or DEBUG for more detailed output
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+logging.getLogger("telegram.bot").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Survey data
 survey = [
